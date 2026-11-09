@@ -1,16 +1,18 @@
-# PCA_withbasin and PCA_QMMM_withbasin
+# PCA_withbasin, PCA_QMMM_withbasin and PCA_domain
 
-Two scripts for asking whether the acylenzyme (AEC) ensemble of each class A β-lactamase is
+Three scripts built around the Cα ensemble PCA of `PCA.py`. The first two ask whether the acylenzyme (AEC) ensemble of each class A β-lactamase is
 **pre-organised towards the tetrahedral-intermediate (TI) ensemble**, and whether carbapenemases
 (KPC-2, NMC-A, SFC-1, SME-1) are better pre-organised than the carbapenem-inhibited enzymes
-(BlaC, CTX-M-16, SHV-1, TEM-1).
+(BlaC, CTX-M-16, SHV-1, TEM-1). The third is a generalised `PCA.py` that also compares a **domain in a full
+(bifunctional) protein with the same domain simulated alone**.
 
 | Script | Purpose |
 |---|---|
 | `PCA_withbasin.py` | Per enzyme: reproduces the RS/TS Cα PCA from `PCA.py`, defines the **TI high-density region (HDR)**, describes what the protein looks like there (hydrogen bonds to meropenem, oxyanion hole, omega loop, hinge, hydration), and measures how often AEC frames look like it (the **reactive complex**). `--aggregate` compares the groups. |
 | `PCA_QMMM_withbasin.py` | Add-on: scores KPC-2 deacylation **QM/MM transition-state frames** against each enzyme's TI-HDR signature, so the TS can be compared with the reactive complex of all eight enzymes. Does not modify `PCA_withbasin.py`. |
+| `PCA_domain.py` | `PCA.py` with extra options: per-system atom selections, atom/residue checks, per-system run and frame settings, frame balancing, optional rigid-core superposition. With default options it reproduces `PCA.py` exactly. Stand-alone (needs no other script). Used for domain-in-full vs domain-alone comparisons. |
 
-## What the results can and cannot say
+## What the results can and cannot say (PCA_withbasin and PCA_QMMM_withbasin)
 
 * The MD analysis measures **pre-organisation**: overlap of the AEC ensemble with the TI ensemble and
   its active-site pattern. This is the sense of "transition state-like conformation (TLC)" used in the
@@ -29,12 +31,14 @@ PCA_QMMM_withbasin.py            QM/MM add-on
 omega_loop_analysis.py           (or OmegaLoop.py)   feature extraction, landmarks, group tests
 loop_cluster_structures.py       (or OmegaLoopRepresentative.py)   dihedral signature helpers
 ti_basin_ca_pca.py               optional: adds OVL/BC overlap coefficients to the summary
+PCA_domain.py                    stand-alone: needs only numpy, matplotlib and MDAnalysis
 ```
 
-Python 3.8+ with `numpy pandas scipy scikit-learn matplotlib MDAnalysis biopython`.
+Python 3.8+ with `numpy pandas scipy scikit-learn matplotlib MDAnalysis biopython`
+(`PCA_domain.py` itself only needs `numpy matplotlib MDAnalysis`).
 (The Biopython "Bio.Application deprecated" warning is harmless.)
 
-## Input layout
+## Input layout (PCA_withbasin)
 
 One folder per state per enzyme, as for `PCA.py`:
 
@@ -197,11 +201,84 @@ python PCA_QMMM_withbasin.py --module PCA_withbasin \
   not on a strictly common footing.
 * Ligand atom names (`O71`, `N4`, `O31/O32`, tail atoms) must be the same in the AEC, TI and QM/MM topologies.
 
+## PCA_domain.py
+
+### What it does
+
+`PCA.py` compares two simulation sets that share one topology and one atom selection (RS vs TS). `PCA_domain.py`
+keeps that behaviour and outputs, and adds what is needed to compare **a domain inside a full protein with the
+domain simulated alone**: the two systems have different topologies and residue numbering, so each system gets its own
+selection of the domain Cα atoms. Both selections must contain the **same atoms in the same order**; the script checks the
+atom count and the residue names before doing the PCA.
+
+As in `PCA.py`: Cα atoms, terminal trimming, frames `[equil::stride]` of every run, all frames superposed on frame 0 of
+the first system's Run1 (`trans.fit_rot_trans`), both ensembles pooled, mean removed, covariance diagonalised,
+projection `X @ eigvec`. With no new options the results are identical to `PCA.py` (verified on synthetic data: the PC1
+and PC2 residue contributions are identical).
+
+It is independent of `PCA_withbasin.py`; the basin scripts assume both ensembles share a topology.
+
+### Run it
+
+Domain in the full enzyme (first system) vs the domain alone (second system):
+
+```bash
+python PCA_domain.py \
+    --rs FullEnzyme --rs_top full.parm7 --selection_rs "protein and name CA and resid 201-400" \
+    --ts DomainAlone --ts_top domain.parm7 --selection_ts "protein and name CA" \
+    --label_rs "Domain in full enzyme" --label_ts "Domain alone" \
+    --runs 3 --stride 100 --equil 0 --trim_termini 0 --balance --outdir domain_pca
+```
+
+The original RS vs TS use still works unchanged (`python PCA_domain.py --rs RS --ts TS --rs_top RS.parm7 --ts_top TS.parm7`).
+Trajectories are read from `<folder>/Run<n>/md_dry.nc` unless `--rs_traj/--ts_traj` say otherwise (`{run}` = run number),
+so `prod.nc` or another format can be used.
+
+### New options (all default to the original behaviour)
+
+| Option | Meaning |
+|---|---|
+| `--selection_rs`, `--selection_ts` | atom selection per system (default: `--selection`) |
+| `--trim_rs`, `--trim_ts` | terminal residues trimmed per selection (default: `--trim_termini`) |
+| `--fit_selection_rs`, `--fit_selection_ts` | atoms used **only for the superposition** (e.g. a rigid core of the domain); the PCA still uses the full selection. The two must match atom for atom. Default: the PCA atoms |
+| `--rs_traj`, `--ts_traj` | trajectory pattern inside each folder (default `Run{run}/md_dry.nc`) |
+| `--runs_rs/_ts`, `--equil_rs/_ts`, `--stride_rs/_ts` | per-system replicas, frames discarded, stride (default: `--runs`, `--equil`, `--stride`) |
+| `--balance` | subsample the larger ensemble to the size of the smaller one before the PCA |
+| `--allow_resname_mismatch` | continue if residue names differ (e.g. HIE/HID); otherwise the script stops |
+| `--label_rs`, `--label_ts` | legend labels |
+| `--outdir` | output folder (default: current folder) |
+
+### Outputs
+
+The original files: `PCA_eigenvalues.png`, `PCA_cumulative_variance.png`, `PCA_RS_TS_projection.png`,
+`PC1_residue_contribution.png`, `PC1_residue_contribution.dat`, `PC2_residue_contribution.dat`. New:
+
+| File | Contents |
+|---|---|
+| `PCA_projection.npz` | projections onto the first 10 PCs, plus the ensemble label, run and frame number of every point |
+| `PC_residue_contributions.tsv` | per-atom PC1/PC2 contributions with the residue number and name in **both** systems (to map between the two numberings) |
+| `PCA_variance.txt` | variance, fraction and cumulative fraction for the first 50 PCs |
+
+### Things to check for a domain comparison
+
+* **Same residues.** The domain construct must match the selected residues. Extra tags or caps, or a slightly different
+  boundary, trigger the residue-name check or silently shift the comparison.
+* **Termini.** The ends of a free domain are real termini; in the full enzyme they connect to linkers. Trimming the same
+  residues from both (or none) avoids terminal fraying dominating PC1.
+* **Superposition.** By default the fit uses all PCA atoms, so a flexible region can bias the alignment. A rigid core via
+  `--fit_selection_*` is usually cleaner.
+* **Different sampling.** Set `--equil_*` and `--stride_*` per system when the runs differ in length, and use `--balance`
+  so neither ensemble dominates the pooled PCA.
+* **What a difference means.** The domain alone lacks inter-domain contacts and has a different construct and box. A shifted
+  cloud can be real inter-domain coupling or a setup/truncation effect; compare RMSF, protonation and box settings to tell
+  them apart.
+
 ## Typical workflow
 
 1. For each enzyme, run `PCA_withbasin.py` with identical options; check `summary.txt` and the printed Ambler anchors.
 2. `PCA_withbasin.py --aggregate ...` for the group comparison.
 3. `PCA_QMMM_withbasin.py ...` with the KPC-2 QM/MM TS frames.
+4. For the bifunctional protein: `PCA_domain.py` with one selection per system (domain in the full enzyme and domain alone).
 
 ## Troubleshooting
 
@@ -215,6 +292,8 @@ python PCA_QMMM_withbasin.py --module PCA_withbasin \
 | `could not uniquely locate Glu166` | use `--glu-resid` |
 | `numbering anchors` warning | fewer than four anchors found: labels far from them may be shifted; check the sequence |
 | `possible_numbering_shifts` warning (aggregate) | the same ligand atom bonds position N in one enzyme and N+1 in another: a numbering shift, not biology |
+| `Superposition atoms differ` / `... selects N atoms but ... selects M` (`PCA_domain.py`) | the two selections have different atom counts: adjust `--selection_*` (and `--trim_*`, `--fit_selection_*`) so they select the same atoms |
+| `N of M residue names differ between the two selections` (`PCA_domain.py`) | the selections do not cover the same residues (range off by some residues, tags/caps, trimming); fix them, or use `--allow_resname_mismatch` if only the names differ |
 | `give --ts-frames or --energy` (add-on) | choose the TS frames as above |
 | `NCDF trajectory ... does not contain frame information` (add-on) | the file has no `frame` dimension (for example a single-structure NetCDF restart written by the string method). The add-on currently needs a standard Amber trajectory. Inspect it with `python -c "from scipy.io import netcdf_file as n; f=n('ts.nc',mmap=False); print(f.dimensions); print({k:v.shape for k,v in f.variables.items()})"` (or `ncdump -h ts.nc`) and convert, e.g. `cpptraj`: `parm complex.parm7`, `trajin ts.nc` (several image files: one `trajin` per file), `trajout ts_traj.nc netcdf`, `run`. Then use `ts_traj.nc`. If the `.top` extension is not recognised, link it as `.parm7`. |
 
